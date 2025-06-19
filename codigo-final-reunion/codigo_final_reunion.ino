@@ -3,6 +3,7 @@
 #include <WebServer.h>
 #include <ThingSpeak.h>
 
+// Replace with your network credentials
 const char* ssid     = "Fran";
 const char* password = "alabajat";
 WiFiClient client;
@@ -17,21 +18,23 @@ int sharpVal;
 unsigned long t_thingspeak = 0;
 unsigned long t_actual;
 unsigned long t_giro;
-unsigned long t_cycle;
-
-unsigned long stoptime = 0.2;
-//bool para ciclo de avanzar y frenar, falso frenar, verdadero avanzar
-bool moveState = false;
+unsigned long t_cycle_a = 0;
+unsigned long t_cycle_g = 0;
+bool enMarchaAvanzar = true;
+bool enMarchaGirar = true;
+const unsigned long duracionAvanzar = 150;  
+const unsigned long duracionFrenar = 30;
+const unsigned long duracionGirar = 20;
 //Sensores  
 const int sensorKY = 4;
 const int SHARPpin = 38;
 
-// Motor 1
+// Motor Derecho
 int motor1Pin1 = 9; 
 int motor1Pin2 = 10; 
 int enable1Pin = 12;
 
-// Motor 2
+// Motor Izquierdo
 int motor2Pin1 = 7; 
 int motor2Pin2 = 8; 
 int enable2Pin = 14;
@@ -40,6 +43,8 @@ int enable2Pin = 14;
 const int freq = 30000;
 const int resolution = 8;
 int dutyCycle = 0;
+const int dutycycle_izq = 210;
+const int dutycycle_der = 210;
 
 String valueString = String(0);
 
@@ -114,7 +119,7 @@ void handleRoot() {
     <input type="range" min="0" max="255" step="5" id="motorSlider" oninput="updateMotorSpeedR(this.value)" value="0" style="width:300px"/>
   </body>
   </html>)rawliteral";
-  server.send(200, "text/html",html);
+  server.send(200, "text/html", html);
 }
 
 void handleForward() {
@@ -183,75 +188,6 @@ void handleSpeed() {
   server.send(200);
 }
 
-
-  void mandardatos(){
-    ThingSpeak.setField(3, color ? 1 : 0);      // Campo 1: KY (1=blanco, 0=negro)
-    ThingSpeak.setField(2, sharpVal);           // Campo 2: SHARP
-    int resp = ThingSpeak.writeFields(channelID, writeAPIKey);
-    if (resp == 200) {
-      Serial.println("Datos enviados a ThingSpeak");
-    } else {
-      Serial.print("Error al enviar: ");
-      Serial.println(resp);
-    }
-  }
-void avanzar() {
-  digitalWrite(motor1Pin1, LOW);
-  digitalWrite(motor1Pin2, HIGH);
-  digitalWrite(motor2Pin1, LOW);
-  digitalWrite(motor2Pin2, HIGH);
-  ledcWrite(enable1Pin, 180);
-  ledcWrite(enable2Pin, 180);
-}
-
-  void retroceder() {
-    digitalWrite(motor1Pin1, HIGH);
-    digitalWrite(motor1Pin2, LOW);
-    digitalWrite(motor2Pin1, HIGH);
-    digitalWrite(motor2Pin2, LOW);
-    ledcWrite(enable1Pin, 180);
-    ledcWrite(enable2Pin, 180);
-  }
-
-  void girar() {
-    digitalWrite(motor1Pin1, HIGH);
-    digitalWrite(motor1Pin2, LOW);
-    digitalWrite(motor2Pin1, LOW);
-    digitalWrite(motor2Pin2, HIGH);
-    ledcWrite(enable1Pin, 180);
-    ledcWrite(enable2Pin, 180);
-  }
-  void frenar() {
-    digitalWrite(motor1Pin1, LOW);
-    digitalWrite(motor1Pin2, LOW);
-    digitalWrite(motor2Pin1, LOW);
-    digitalWrite(motor2Pin2, LOW);
-    ledcWrite(enable1Pin, 180);
-    ledcWrite(enable2Pin, 180);
-  }
-  bool readKY() {
-    int val = digitalRead(sensorKY);
-
-    if (val == HIGH) {
-      Serial.println("Blanco");  
-      return true;
-    } else {
-      Serial.println("Negro");
-      return false;
-    }
-  }
-
-  int promedio(int n) {
-    long suma = 0;
-    for (int i = 0; i < n; i++) {
-      suma += analogRead(SHARPpin);
-    }
-    Serial.println(suma/n);
-    return suma / n;
-  }
-
-
-
 void setup() {
   Serial.begin(9600);
   // Set the Motor pins as outputs
@@ -299,65 +235,159 @@ void loop() {
   server.handleClient();
   color = readKY();
   sharpVal = promedio(20);
-  int modorobot = (int)ThingSpeak.readFloatField(channelID, 1, writeAPIKey);
+  float modorobot = ThingSpeak.readFloatField(channelID, 1, writeAPIKey);
+  Serial.println("Valor del modorobot: ");
+  Serial.println(modorobot);
   if (millis() - t_thingspeak >= 15000) { //Mandar datos
     t_thingspeak = millis();
     mandardatos();
   }
-
-  switch(modorobot) {
-    case 2:
-      Serial.print("Usando a: Modo Control");
-    break;
-
-    case 3:
-      Serial.print("Usando a: Modo Roomba");
-        if (color && moveState) {
-        if (millis() - t_cycle < 50) {
-          avanzar(); 
-        } 
-        else if (millis() - t_cycle < 100) {
-          frenar();
-        }
-        else {
-          t_cycle = millis();
-        }
+  if (modorobot==2){ //Control
+    Serial.print("Usando a: Modo Control");
+    server.handleClient();
+  }
+  else{
+    if (modorobot == 3) {
+      server.handleClient();
+      Serial.print("Usando: Modo Roomba");
+      while (!color) {
+        avanzarFrenado();
+        color = readKY(); // actualizar sensor
       }
-      else {
-        moveState = millis() - t_cycle < 1300;
-        if (millis() - t_cycle < 600) {
-          retroceder();
-        }
-        else {
-          girar();
-        }
+      frenar();
+      t_actual = millis();
+      if (color){
+        while (millis() - t_actual < 800) retroceder();
+        t_actual = millis();
+        t_giro = random(75, 150);
+        while (millis() - t_actual < t_giro) girarFrenado();        
       }
-    break;
-    default:
+    } else {
+      server.handleClient();
       Serial.print("Usando: Modo Balanceado");
-      if (color && moveState) {
-        if (moveState) {
-          if (millis() - t_cycle < 200) {
-            avanzar();
-          } else {
-            frenar();
-            moveState = false;
-            t_cycle = millis();
-          }
+      if (color) {
+        t_actual = millis();
+        while (millis() - t_actual < 500) retroceder();
+        t_actual = millis();
+        t_giro = random(75, 150);
+        while (millis() - t_actual < t_giro) girarFrenado();
+      } else {
+        if (sharpVal > 500) {
+          avanzarFrenado();
         } else {
-          if (millis() - t_cycle < 100) {
-            frenar();
-          } else {
-            moveState = true;
-            t_cycle = millis();
-          }
+            girarFrenado();
+          
         }
       }
-        else{
-          moveState = millis() - t_cycle < 600;
-          retroceder();
-        }
-    break;
-
+    }
   }
 }
+
+  void mandardatos(){
+    ThingSpeak.setField(3, color ? 1 : 0);      // Campo 1: KY (1=blanco, 0=negro)
+    ThingSpeak.setField(2, sharpVal);           // Campo 2: SHARP
+    int resp = ThingSpeak.writeFields(channelID, writeAPIKey);
+    if (resp == 200) {
+      Serial.println("Datos enviados a ThingSpeak");
+    } else {
+      Serial.print("Error al enviar: ");
+      Serial.println(resp);
+    }
+  }
+void avanzar() {
+  digitalWrite(motor1Pin1, LOW);
+  digitalWrite(motor1Pin2, HIGH);
+  digitalWrite(motor2Pin1, LOW);
+  digitalWrite(motor2Pin2, HIGH);
+  ledcWrite(enable1Pin, dutycycle_der);
+  ledcWrite(enable2Pin, dutycycle_izq);
+}
+
+  void retroceder() {
+    digitalWrite(motor1Pin1, HIGH);
+    digitalWrite(motor1Pin2, LOW);
+    digitalWrite(motor2Pin1, HIGH);
+    digitalWrite(motor2Pin2, LOW);
+    ledcWrite(enable1Pin, dutycycle_der);
+    ledcWrite(enable2Pin, dutycycle_izq);
+  }
+
+  void girar() {
+    digitalWrite(motor1Pin1, HIGH);
+    digitalWrite(motor1Pin2, LOW);
+    digitalWrite(motor2Pin1, LOW);
+    digitalWrite(motor2Pin2, HIGH);
+    ledcWrite(enable1Pin, dutycycle_der);
+    ledcWrite(enable2Pin, dutycycle_izq);
+  }
+  void frenar() {
+    digitalWrite(motor1Pin1, LOW);
+    digitalWrite(motor1Pin2, LOW);
+    digitalWrite(motor2Pin1, LOW);
+    digitalWrite(motor2Pin2, LOW);
+    ledcWrite(enable1Pin, 0);
+    ledcWrite(enable2Pin, 0);
+  }
+  bool readKY() {
+    int val = digitalRead(sensorKY);
+
+    if (val == HIGH) {
+      Serial.println("Negro");  
+      return true;
+    } else {
+      Serial.println("Blanco");
+      return false;
+    }
+  }
+
+  int promedio(int n) {
+    long suma = 0;
+    for (int i = 0; i < n; i++) {
+      suma += analogRead(SHARPpin);
+    }
+    Serial.println(suma/n);
+    return suma / n;
+  }
+
+  void avanzarFrenado() {
+    enMarchaGirar = true;
+    unsigned long ahora = millis();
+    unsigned long duracionActual = enMarchaAvanzar ? duracionAvanzar : duracionFrenar;
+    if (ahora - t_cycle_a >= duracionActual) {
+      t_cycle_a = ahora;
+      enMarchaAvanzar = !enMarchaAvanzar; 
+    }
+    if (enMarchaAvanzar) {
+      avanzar();
+    } else {
+      frenar();
+    }
+  } 
+
+void girarFrenado(){
+      if (millis() - t_cycle_g >= 5) {
+      t_cycle_g = millis();
+      enMarchaGirar = !enMarchaGirar; 
+    }
+    if (enMarchaGirar) {
+      girar();
+    } else {
+      frenar();
+    }
+}
+/* void girarFrenado() {
+    enMarchaAvanzar = true;
+    unsigned long ahora = millis();
+    unsigned long duracionActual = enMarchaGirar ? duracionGirar : duracionFrenar;
+    if (ahora - t_cycle_g >= duracionActual) {
+      t_cycle_g = ahora;
+      enMarchaGirar = !enMarchaGirar; 
+    }
+    if (enMarchaGirar) {
+      girar();
+    } else {
+      frenar();
+    }
+  } 
+*/
+ 

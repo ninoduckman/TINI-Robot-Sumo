@@ -2,4 +2,4 @@
 ### Francisco Acuña, Lucas Cabriotto, Paulino Pose, Camilo Tejera
 Este repositorio contiene varias versiones del codigo cargado al robot de sumo creado para el proyecto
 
-ultima version funcional: version-16-6-noche
+ultima version funcional: codigo-final-reunion
